@@ -7,6 +7,9 @@ import json
 from sklearn.model_selection import train_test_split
 import logging
 
+sys.path.append(str(Path(__file__).parent))
+from utils.split_utils import MANIFEST_NAME, load_groups
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -58,32 +61,43 @@ class DatasetSplitter:
 
         logger.info(f"  Total images: {len(images)}")
 
-        # Handle edge case: very few images
-        if len(images) < 3:
-            logger.warning(f"  Only {len(images)} image(s) - putting all in train set")
-            train_imgs = images
-            val_imgs = []
-            test_imgs = []
+        # Group images so all photos of one observation stay in the same split
+        groups = load_groups(source_dir)
+        if not groups:
+            logger.warning(f"  No {MANIFEST_NAME} found - re-run 05_preprocess.py to "
+                           f"enable observation-grouped splits. Treating each image "
+                           f"as independent (may leak near-duplicates).")
+        group_of = {img: groups.get(img.name, img.name) for img in images}
+        unique_groups = sorted(set(group_of.values()))
+        logger.info(f"  Independent groups (observations): {len(unique_groups)}")
+
+        # Handle edge case: very few groups
+        if len(unique_groups) < 3:
+            logger.warning(f"  Only {len(unique_groups)} group(s) - putting all in train set")
+            train_groups, val_groups, test_groups = set(unique_groups), set(), set()
         else:
-            # Create splits
-            train_imgs, temp_imgs = train_test_split(
-                images,
+            # Split *groups*, not images (ratios are therefore approximate in images)
+            train_g, temp_g = train_test_split(
+                unique_groups,
                 train_size=self.train_ratio,
                 random_state=42,
                 shuffle=True
             )
 
-            if len(temp_imgs) < 2:
-                # Not enough for val/test split
-                val_imgs = temp_imgs
-                test_imgs = []
+            if len(temp_g) < 2:
+                val_g, test_g = temp_g, []
             else:
-                val_imgs, test_imgs = train_test_split(
-                    temp_imgs,
+                val_g, test_g = train_test_split(
+                    temp_g,
                     train_size=self.val_ratio / (self.val_ratio + self.test_ratio),
                     random_state=42,
                     shuffle=True
                 )
+            train_groups, val_groups, test_groups = set(train_g), set(val_g), set(test_g)
+
+        train_imgs = [i for i in images if group_of[i] in train_groups]
+        val_imgs = [i for i in images if group_of[i] in val_groups]
+        test_imgs = [i for i in images if group_of[i] in test_groups]
 
         logger.info(f"  Train: {len(train_imgs)}")
         logger.info(f"  Val: {len(val_imgs)}")
@@ -212,6 +226,14 @@ class DatasetSplitter:
         all_species = []
         for category in ['prohibited', 'restricted', 'legal']:
             all_species.extend([s['code'] for s in self.config['species'][category]])
+
+        # Remove previous splits first: copying on top of an old split would leave
+        # stale images behind and could put the same image in two splits.
+        for split_name in ['train', 'val', 'test']:
+            split_dir = self.output_dir / split_name
+            if split_dir.exists():
+                logger.info(f"Removing previous split: {split_dir}")
+                shutil.rmtree(split_dir)
 
         # Create splits for each species
         for code in all_species:

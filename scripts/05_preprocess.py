@@ -3,11 +3,13 @@ import sys
 from pathlib import Path
 import yaml
 import shutil
+import json
 from tqdm import tqdm
 import logging
 
 sys.path.append(str(Path(__file__).parent))
 from utils.image_utils import validate_image, resize_image, get_image_stats
+from utils.split_utils import MANIFEST_NAME, group_id_for
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,6 +61,10 @@ class DatasetPreprocessor:
         ]
 
         total_count = 0
+        # new filename -> {source, original filename, group id}. 06_create_splits.py
+        # uses the group id so all photos of one iNaturalist observation land in
+        # the same split (otherwise near-duplicate photos leak into val/test).
+        manifest = {}
 
         for source_name, source_dir in sources:
             if not source_dir.exists():
@@ -79,12 +85,21 @@ class DatasetPreprocessor:
 
                 # Copy file
                 shutil.copy(img_file, new_path)
+                manifest[new_filename] = {
+                    'source': source_name,
+                    'original_filename': img_file.name,
+                    'group_id': group_id_for(source_name, img_file.name),
+                }
                 count += 1
                 total_count += 1
 
             logger.info(f"  {source_name}: {count} images")
 
-        logger.info(f"  TOTAL: {total_count} images")
+        with open(output_dir / MANIFEST_NAME, 'w') as f:
+            json.dump(manifest, f, indent=2)
+
+        n_groups = len({m['group_id'] for m in manifest.values()})
+        logger.info(f"  TOTAL: {total_count} images ({n_groups} independent groups)")
         return total_count
 
     def clean_images(self, species_code: str) -> dict:
