@@ -1,132 +1,98 @@
 """
-Model Performance Comparison
-Visualizes validation accuracy across all trained models
+Model comparison on the 3-class regulatory category task.
+
+07_* and 08_* train on data/processed/<split>/, whose subfolders are the three
+categories, so they predict prohibited / restricted / legal only. The
+hierarchical model's Stage 1 solves the same task, so this chart compares
+category accuracy across all five. Only the hierarchical model also predicts
+the species; its end-to-end species accuracy is shown separately.
+
+Data:
+  evaluation_results/training_history/*.json     (training_history.py)
+  evaluation_results/hierarchical_<split>_metrics.json  (12_evaluate_hierarchical.py)
 """
 
+import json
+
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 
-# Model performance data
-models = ['Basic CNN\n(No Aug)', 'Basic CNN\n(With Aug)', 'ResNet50\n(No Aug)', 'ResNet50\n(With Aug)', 'Hierarchical\n(2-Stage)']
-val_accuracy = [57.4, 54.4, 85.9, 89.9, 91.2]  # Validation accuracy
-test_accuracy = [56.4, 56.0, 85.5, None, None]  # Test accuracy (where available)
-train_val_gap = [3.4, 0.6, 14.1, 9.8, 7.5]  # Train/val gap (overfitting measure)
+from training_history import ROOT, OUTPUT_DIR, best, load
 
-# Hierarchical test accuracy comes from scripts/12_evaluate_hierarchical.py
-_ROOT = Path(__file__).resolve().parent.parent.parent
-_HIER_TEST = _ROOT / 'evaluation_results' / 'hierarchical_test_metrics.json'
-if _HIER_TEST.exists():
-    import json
-    with open(_HIER_TEST) as f:
-        test_accuracy[4] = 100 * json.load(f)['species']['end_to_end_accuracy']['rate']
+MODELS = [
+    ('Basic CNN\n(no aug)', '07_cnn_no_aug'),
+    ('Basic CNN\n(aug)', '07_cnn_aug'),
+    ('ResNet50\n(no aug)', '08_resnet_no_aug'),
+    ('ResNet50\n(aug)', '08_resnet_aug'),
+    ('Hierarchical\nStage 1', '10_hierarchical'),
+]
 
-# Color scheme
-colors = ['#3498db', '#3498db', '#e74c3c', '#e74c3c', '#27ae60']
-edge_colors = ['#2980b9', '#2980b9', '#c0392b', '#c0392b', '#229954']
 
-# Setup output directory
-OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / 'evaluation_results' / 'visualizations'
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def hierarchical_metrics(split):
+    path = ROOT / 'evaluation_results' / f'hierarchical_{split}_metrics.json'
+    with open(path) as f:
+        return json.load(f)
 
-# Create figure with two subplots
+
+rows = []
+for label, run in MODELS:
+    history = load(run)
+    if run == '10_hierarchical':
+        # Stage 1 is the category model. Report accuracy from the full
+        # evaluation script so val and test are measured the same way.
+        stage = history['stages'][0]
+        val = 100 * hierarchical_metrics('val')['category']['accuracy']['rate']
+        test = 100 * hierarchical_metrics('test')['category']['accuracy']['rate']
+    else:
+        stage = history['stages'][-1]  # the stage whose checkpoint is saved
+        val, test = best(stage)['val_acc'], history['test_acc']
+    b = best(stage)
+    rows.append({'label': label, 'val': val, 'test': test,
+                 'gap': b['train_acc'] - b['val_acc']})
+
+species_test = 100 * hierarchical_metrics('test')['species']['end_to_end_accuracy']['rate']
+species_val = 100 * hierarchical_metrics('val')['species']['end_to_end_accuracy']['rate']
+
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+x = np.arange(len(rows))
+w = 0.38
 
-# ============================================================
-# Plot 1: Validation Accuracy Comparison
-# ============================================================
-x_pos = np.arange(len(models))
-bars = ax1.bar(x_pos, val_accuracy, color=colors, edgecolor=edge_colors, linewidth=2, alpha=0.85)
-
-# Add value labels on bars
-for i, (bar, val) in enumerate(zip(bars, val_accuracy)):
-    height = bar.get_height()
-    ax1.text(bar.get_x() + bar.get_width()/2., height + 1,
-             f'{val:.1f}%',
-             ha='center', va='bottom', fontsize=12, fontweight='bold')
-
-    # Add test accuracy if available
-    if test_accuracy[i] is not None:
-        ax1.text(bar.get_x() + bar.get_width()/2., height/2,
-                 f'Test: {test_accuracy[i]:.1f}%',
-                 ha='center', va='center', fontsize=9, style='italic', color='white')
-
-ax1.set_xlabel('Model Architecture', fontsize=13, fontweight='bold')
-ax1.set_ylabel('Validation Accuracy (%)', fontsize=13, fontweight='bold')
-ax1.set_title('Model Performance Comparison\nValidation Accuracy', fontsize=14, fontweight='bold')
-ax1.set_xticks(x_pos)
-ax1.set_xticklabels(models, fontsize=11)
+bars_v = ax1.bar(x - w / 2, [r['val'] for r in rows], w, label='Validation', color='#3498db')
+bars_t = ax1.bar(x + w / 2, [r['test'] for r in rows], w, label='Test', color='#27ae60')
+for bars in (bars_v, bars_t):
+    for bar in bars:
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                 f'{bar.get_height():.1f}', ha='center', va='bottom', fontsize=10)
+ax1.set_xticks(x, [r['label'] for r in rows])
+ax1.set_ylabel('Category accuracy (%)', fontweight='bold')
 ax1.set_ylim(0, 100)
-ax1.grid(axis='y', alpha=0.3, linestyle='--')
-ax1.axhline(y=90, color='green', linestyle='--', linewidth=2, alpha=0.5, label='90% Target')
-ax1.legend(loc='upper left', fontsize=10)
+ax1.set_title('Regulatory category accuracy (3 classes)\n'
+              f'Hierarchical end-to-end species accuracy (28 species): '
+              f'val {species_val:.1f}%, test {species_test:.1f}%', fontweight='bold')
+ax1.grid(axis='y', alpha=0.3)
+ax1.legend(loc='upper left')
 
-# Add annotation for improvement
-ax1.annotate('', xy=(4, val_accuracy[4]), xytext=(0, val_accuracy[0]),
-            arrowprops=dict(arrowstyle='->', lw=2, color='black', alpha=0.3))
-ax1.text(2, 75, f'+{val_accuracy[4] - val_accuracy[0]:.1f}%\nimprovement',
-         ha='center', fontsize=11, fontweight='bold',
-         bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.3))
+bars_g = ax2.bar(x, [r['gap'] for r in rows], 0.6, color='#e67e22')
+for bar in bars_g:
+    h = bar.get_height()
+    ax2.text(bar.get_x() + bar.get_width() / 2, h + (0.3 if h >= 0 else -0.3),
+             f'{h:.1f}', ha='center', va='bottom' if h >= 0 else 'top', fontsize=10)
+ax2.axhline(0, color='black', lw=0.8)
+ax2.set_xticks(x, [r['label'] for r in rows])
+ax2.set_ylabel('Train − val accuracy at the saved epoch (points)', fontweight='bold')
+ax2.set_title('Overfitting (lower is better)', fontweight='bold')
+ax2.grid(axis='y', alpha=0.3)
 
-# ============================================================
-# Plot 2: Overfitting Analysis (Train/Val Gap)
-# ============================================================
-bars2 = ax2.bar(x_pos, train_val_gap, color=colors, edgecolor=edge_colors, linewidth=2, alpha=0.85)
+fig.suptitle('Model comparison on the observation-grouped split', fontsize=15, fontweight='bold')
+fig.tight_layout()
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+out = OUTPUT_DIR / '07_model_comparison.png'
+fig.savefig(out, dpi=200, bbox_inches='tight')
+print(f'✓ Saved {out}\n')
 
-# Add value labels
-for bar, val in zip(bars2, train_val_gap):
-    height = bar.get_height()
-    ax2.text(bar.get_x() + bar.get_width()/2., height + 0.3,
-             f'{val:.1f}%',
-             ha='center', va='bottom', fontsize=12, fontweight='bold')
-
-ax2.set_xlabel('Model Architecture', fontsize=13, fontweight='bold')
-ax2.set_ylabel('Train/Val Gap (%)', fontsize=13, fontweight='bold')
-ax2.set_title('Overfitting Analysis\nTrain-Validation Accuracy Gap (Lower is Better)', fontsize=14, fontweight='bold')
-ax2.set_xticks(x_pos)
-ax2.set_xticklabels(models, fontsize=11)
-ax2.set_ylim(0, 16)
-ax2.grid(axis='y', alpha=0.3, linestyle='--')
-ax2.axhline(y=5, color='green', linestyle='--', linewidth=2, alpha=0.5, label='<5% Target (Good)')
-ax2.axhline(y=10, color='orange', linestyle='--', linewidth=2, alpha=0.5, label='<10% (Acceptable)')
-ax2.legend(loc='upper right', fontsize=9)
-
-# Add annotation for best generalization
-best_idx = np.argmin(train_val_gap)
-ax2.annotate('Best\nGeneralization',
-            xy=(best_idx, train_val_gap[best_idx]), xytext=(best_idx-0.5, train_val_gap[best_idx]+3),
-            arrowprops=dict(arrowstyle='->', lw=2, color='green'),
-            fontsize=10, fontweight='bold', color='green',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgreen', alpha=0.5))
-
-plt.suptitle('Fish Classification: Model Performance & Generalization Analysis',
-             fontsize=16, fontweight='bold', y=1.02)
-
-plt.tight_layout()
-
-# Save
-output_path = OUTPUT_DIR / '07_model_comparison.png'
-plt.savefig(output_path, dpi=300, bbox_inches='tight')
-print(f"✓ Visualization saved to: {output_path}")
-
-# Print summary
-print(f"\n{'='*70}")
-print(f"Model Performance Summary")
-print(f"{'='*70}")
-print(f"\n{'Model':<25} {'Val Acc':<12} {'Test Acc':<12} {'Train/Val Gap':<15}")
-print(f"{'-'*70}")
-for i, model in enumerate(models):
-    model_clean = model.replace('\n', ' ')
-    test_str = f"{test_accuracy[i]:.1f}%" if test_accuracy[i] is not None else "N/A"
-    print(f"{model_clean:<25} {val_accuracy[i]:<12.1f}% {test_str:<12} {train_val_gap[i]:<15.1f}%")
-
-print(f"\n{'='*70}")
-print(f"Key Findings:")
-print(f"{'='*70}")
-print(f"  • Best Accuracy: {models[np.argmax(val_accuracy)].replace(chr(10), ' ')} ({max(val_accuracy):.1f}%)")
-print(f"  • Best Generalization: {models[np.argmin(train_val_gap)].replace(chr(10), ' ')} ({min(train_val_gap):.1f}% gap)")
-print(f"  • Improvement over Baseline: +{max(val_accuracy) - val_accuracy[0]:.1f}%")
-print(f"  • Transfer Learning Impact: +{val_accuracy[2] - val_accuracy[0]:.1f}%")
-print(f"  • Data Augmentation Impact: +{val_accuracy[3] - val_accuracy[2]:.1f}% (ResNet)")
-print(f"  • Hierarchical Advantage: +{val_accuracy[4] - val_accuracy[3]:.1f}% over best ResNet")
-print(f"{'='*70}")
+print(f"{'Model':<24}{'Val':>8}{'Test':>8}{'Gap':>8}")
+for r in rows:
+    print(f"{r['label'].replace(chr(10), ' '):<24}{r['val']:>7.1f}%{r['test']:>7.1f}%{r['gap']:>8.1f}")
+print(f'\nHierarchical end-to-end species accuracy: val {species_val:.1f}%, test {species_test:.1f}%')
