@@ -79,3 +79,6 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+
+# Assembled Hugging Face Space (contains model weights)
+hf_space/
