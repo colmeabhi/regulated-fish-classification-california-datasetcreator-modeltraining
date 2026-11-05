@@ -25,21 +25,80 @@ Because Stage 1 decides which species model is used, a Stage 1 mistake can't be 
 
 ## Results
 
-| Model | Val accuracy | Test accuracy |
+All five models were retrained on the observation-grouped split (no photo of
+the same fish in two splits; the evaluation's leakage check finds 0 shared
+observations in val and in test).
+
+### Category accuracy (prohibited / restricted / legal)
+
+The basic CNN and ResNet50 scripts train on the three category folders, so they
+predict the **category only**, not the species. The hierarchical model's Stage 1
+does the same job, so this is the like-for-like comparison.
+
+| Model | Val | Test | Train − val gap |
+|---|---|---|---|
+| Basic CNN, no augmentation | 58.0% | 57.2% | −3.9 |
+| Basic CNN, augmentation | 56.8% | 53.1% | −4.0 |
+| ResNet50 transfer learning, no augmentation | 84.9% | 80.7% | 15.0 |
+| ResNet50 transfer learning, augmentation | 85.2% | 83.1% | 14.5 |
+| **Hierarchical, Stage 1** | **85.4%** | **85.2%** | 13.9 |
+
+![Model comparison](evaluation_results/visualizations/07_model_comparison.png)
+
+The gap is train accuracy minus val accuracy at the saved checkpoint. It is
+negative for the basic CNN because its train accuracy is measured with dropout
+(and, for one run, augmentation) switched on.
+
+### Hierarchical model, end to end (species and safety)
+
+From `scripts/12_evaluate_hierarchical.py`, with 95% Wilson intervals:
+
+| Metric | Val (734 images) | Test (757 images) |
 |---|---|---|
-| Basic CNN (no augmentation) | 57.4% | 56.4% |
-| Basic CNN (augmentation) | 54.4% | 56.0% |
-| ResNet50 transfer learning (no augmentation) | 85.9% | 85.5% |
-| ResNet50 transfer learning (augmentation) | 89.9% | not yet measured |
-| **Hierarchical, 2-stage** | **91.2%** | not yet measured |
+| End-to-end species accuracy (28 species) | 74.7% [71.4–77.7] | 73.7% [70.5–76.7] |
+| **Prohibited predicted as legal** | **6.5% [3.9–10.6]** (14/215) | **0.8% [0.2–3.0]** (2/236) |
+| Prohibited predicted as restricted | 11.2% [7.6–16.1] | 13.6% [9.8–18.5] |
+| Restricted predicted as legal | 7.1% [4.8–10.2] | 8.9% [6.3–12.4] |
+| Legal flagged as prohibited (false alarm) | 1.8% [0.6–5.2] | 1.1% [0.3–3.9] |
 
-Test-set results for the hierarchical model, including the prohibited → legal error rate, are produced by `scripts/12_evaluate_hierarchical.py` (see [Evaluation](#evaluation)).
+- **The prohibited → legal rate is uncertain.** Val and test differ by more than
+  their intervals suggest is likely, so treat it as somewhere in the 1–6% range,
+  not as 0.8%.
+- **Stage 1 mistakes are the main cost.** Given the correct category, the species
+  models score 83.1% (prohibited), 81.0% (restricted) and 88.0% (legal); end to
+  end that falls to 73.7%.
+- **Lowering the prohibited threshold helps.** On val, flagging a fish as
+  prohibited when P(prohibited) ≥ 0.1 cuts prohibited → legal from 6.5% to 3.7%
+  and raises prohibited recall from 83.3% to 90.2%, at the cost of 5.4% of legal
+  fish flagged (from 2.4%). See the threshold sweep in
+  `evaluation_results/hierarchical_val_report.md`.
 
-> **Caveat on these figures.** They were produced with an earlier split that assigned each *photo* to train/val/test independently. 870 of 2,801 iNaturalist observations contain several photos of the same fish, so near-duplicates could sit on both sides of the split, which inflates accuracy. The pipeline now splits by observation. Rebuild the splits and retrain before quoting final test numbers.
+Full reports, confusion matrices and every prohibited fish the model missed are
+in `evaluation_results/hierarchical_{val,test}_*`.
+
+### Compared with the earlier figures
+
+The previous README reported 91.2% val for the hierarchical model and 89.9% for
+ResNet50 with augmentation. Those came from a split that assigned each *photo*
+independently, so several photos of one fish could land in both train and
+val/test, which inflates accuracy. On the grouped split, category accuracy is
+about 85%. Use the numbers above.
+
+### How these were produced
+
+- Apple M4 (MPS), 16 GB, PyTorch 2.15.0, torchvision 0.29.2.
+- One run per model with the scripts' default hyperparameters. No random seed is
+  set, so a rerun will give slightly different numbers.
+- Training time: hierarchical 135 min, ResNet50 79 min (aug) and 88 min (no
+  aug), basic CNN about 30 min each.
+- Val accuracy is the best epoch's, which is also how the checkpoint was chosen,
+  so it is slightly optimistic. Test accuracy is the unbiased figure.
 
 ## Dataset
 
-**4,905 images across 28 species** (3,403 train / 745 val / 757 test).
+**4,832 images across 28 species** (3,341 train / 734 val / 757 test), split by
+iNaturalist observation. 255 of them (5%) are synthetic: 177 train, 37 val,
+41 test.
 
 | Category | Species | What it means for an angler |
 |---|---|---|
@@ -53,7 +112,16 @@ Test-set results for the hierarchical model, including the prohibited → legal 
 - A local image library (optional)
 - Synthetic images generated with Google Gemini for under-represented species (optional, needs `GOOGLE_API_KEY`)
 
-Rare species have few images. Several prohibited species (Bronzespotted, Gulf Grouper, Broomtail Grouper) have only 8–10 test images each, so their individual recall figures have wide confidence intervals.
+Rare species have few images: seven species have 31–35 training images and only
+6–8 test images each (Quillback, Yelloweye, Bronzespotted, Cowcod, Gulf Grouper,
+Broomtail Grouper, Pacific Halibut), so their per-species figures have wide
+confidence intervals.
+
+**Most rare-species test images are synthetic.** All test images for
+Bronzespotted (8), Gulf Grouper (8), Broomtail Grouper (6) and Pacific Halibut
+(8), and 7 of 8 for Cowcod, were generated with Gemini. Their per-species recall
+therefore shows how well the model recognises generated images of those fish,
+not real photos. Real-photo performance on these species is unmeasured.
 
 ## Quick start
 
@@ -86,8 +154,20 @@ python scripts/11_predict_hierarchical.py path/to/fish_image.jpg
 ### 5. Evaluate
 ```bash
 python scripts/12_evaluate_hierarchical.py              # held-out test split
-python scripts/12_evaluate_hierarchical.py --split val  # compare with the 91.2% val figure
+python scripts/12_evaluate_hierarchical.py --split val  # pick a threshold here
 ```
+
+### 6. Redraw the charts
+The training scripts print their per-epoch metrics, so save each run's output
+to `logs/` (names are listed in `scripts/visualizations/training_history.py`):
+```bash
+mkdir -p logs
+python scripts/07_train.py > logs/07_cnn_aug.log 2>&1   # likewise for the other runs
+python scripts/visualizations/training_history.py       # logs -> evaluation_results/training_history/
+for f in scripts/visualizations/0*.py; do python "$f"; done
+```
+The exported histories are committed, so the charts can be redrawn without
+retraining.
 
 ## Evaluation
 
@@ -139,7 +219,11 @@ What it measures:
 ## Limitations
 
 - **Category errors are final.** A Stage 1 mistake can't be corrected by Stage 2.
-- **Small classes.** Several prohibited species have under 50 training images.
+- **Small classes.** Seven species have 31–35 training images.
+- **Synthetic test images.** The test sets for the rarest species are mostly or
+  entirely Gemini-generated, so accuracy on real photos of those fish is unknown.
+- **Overfitting.** The ResNet50-based models reach 99% train accuracy against
+  about 85% on val.
 - **Regulation text is simplified.** Many species map to "See current regulations"; limits vary by management area and season.
 - **Photo conditions.** Most training photos are underwater or well-lit observation photos. Accuracy on deck photos, partially visible fish, or juveniles is unmeasured.
 
