@@ -89,6 +89,37 @@ python scripts/12_evaluate_hierarchical.py              # held-out test split
 python scripts/12_evaluate_hierarchical.py --split val  # compare with the 91.2% val figure
 ```
 
+### 6. Run the web app
+```bash
+pip install gradio
+./deploy/huggingface/prepare_space.sh   # copies app + trained models into hf_space/
+cd hf_space && python app.py            # http://127.0.0.1:7860
+```
+
+Upload a photo and the app answers **"Can I keep this fish?"**:
+
+| Verdict | When |
+|---|---|
+| 🚫 No. Release it. | Predicted prohibited |
+| ⚠️ Don't keep it. | Another category won, but P(prohibited) ≥ `CAUTION_THRESHOLD` (default 0.2) |
+| ❔ Not sure. Release it. | Species confidence below `MIN_SPECIES_CONF` (default 0.5) |
+| ⚠️ Yes, within limits. | Restricted species |
+| ✅ Yes, you can keep it. | Legal species |
+
+Set `PROHIBITED_THRESHOLD` to the threshold you picked from the evaluation sweep.
+
+**Deploy to Hugging Face Spaces (free CPU tier):**
+1. Create a new Space at [huggingface.co/new-space](https://huggingface.co/new-space) with the **Gradio** SDK.
+2. Push the prepared folder to it. The model weights are about 400 MB, so use Git LFS:
+   ```bash
+   cd hf_space
+   git init && git lfs install && git lfs track "*.pth"
+   git add . && git commit -m "Deploy fish classifier"
+   git remote add origin https://huggingface.co/spaces/<your-username>/<space-name>
+   git push -u origin main
+   ```
+3. Optionally set `PROHIBITED_THRESHOLD` under the Space's **Settings → Variables**.
+
 ## Evaluation
 
 `12_evaluate_hierarchical.py` runs the full two-stage pipeline on every image in a split, the same way the app would, and writes to `evaluation_results/`:
@@ -113,6 +144,7 @@ What it measures:
 
 ```
 ├── build_dataset.sh                     # Runs steps 01–06
+├── deploy/huggingface/                  # Gradio web app + Hugging Face Space packaging
 ├── config.yaml                          # Species list, sources, split ratios
 ├── scripts/
 │   ├── 01_download_inaturalist.py       # Download from iNaturalist
