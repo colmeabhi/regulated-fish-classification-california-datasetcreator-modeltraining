@@ -13,6 +13,14 @@ val_accuracy = [57.4, 54.4, 85.9, 89.9, 91.2]  # Validation accuracy
 test_accuracy = [56.4, 56.0, 85.5, None, None]  # Test accuracy (where available)
 train_val_gap = [3.4, 0.6, 14.1, 9.8, 7.5]  # Train/val gap (overfitting measure)
 
+# Hierarchical test accuracy comes from scripts/12_evaluate_hierarchical.py
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_HIER_TEST = _ROOT / 'evaluation_results' / 'hierarchical_test_metrics.json'
+if _HIER_TEST.exists():
+    import json
+    with open(_HIER_TEST) as f:
+        test_accuracy[4] = 100 * json.load(f)['species']['end_to_end_accuracy']['rate']
+
 # Color scheme
 colors = ['#3498db', '#3498db', '#e74c3c', '#e74c3c', '#27ae60']
 edge_colors = ['#2980b9', '#2980b9', '#c0392b', '#c0392b', '#229954']
